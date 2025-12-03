@@ -7,6 +7,7 @@ import json
 import traceback
 import requests
 import urllib.parse
+import time  # 👈 for retry delays
 
 import imageio_ffmpeg
 import google.generativeai as genai
@@ -32,29 +33,38 @@ for folder in [IMAGE_DIR, USED_DIR, BGM_DIR, os.path.dirname(FONT_PATH)]:
         os.makedirs(folder, exist_ok=True)
 
 # =========================
-# 0. IMAGE – POLLINATIONS
+# 0. IMAGE – POLLINATIONS (WITH RETRY)
 # =========================
-def generate_krishna_image(prompt: str, out_path: str) -> bool:
-    try:
-        print("🎨 Generating image from Pollinations...")
-        encoded_prompt = urllib.parse.quote(prompt)
-        url = f"https://image.pollinations.ai/prompt/{encoded_prompt}"
+def generate_krishna_image(prompt: str, out_path: str, retries: int = 3, delay: int = 5) -> bool:
+    """
+    Uses Pollinations to generate an image.
+    Retries a few times if the server returns 5xx or fails.
+    """
+    encoded_prompt = urllib.parse.quote(prompt)
+    url = f"https://image.pollinations.ai/prompt/{encoded_prompt}"
 
-        response = requests.get(url, stream=True, timeout=60)
-        if response.status_code != 200:
-            print(f"❌ Pollinations error: HTTP {response.status_code}")
-            return False
+    for attempt in range(1, retries + 1):
+        try:
+            print(f"🎨 Pollinations attempt {attempt}/{retries}...")
+            response = requests.get(url, stream=True, timeout=60)
 
-        with open(out_path, "wb") as f:
-            for chunk in response.iter_content(1024):
-                f.write(chunk)
+            if response.status_code == 200:
+                with open(out_path, "wb") as f:
+                    for chunk in response.iter_content(1024):
+                        f.write(chunk)
+                print(f"✅ Pollinations image saved to {out_path}")
+                return True
+            else:
+                print(f"⚠️ Pollinations HTTP {response.status_code}")
+        except Exception as e:
+            print(f"⚠️ Pollinations error on attempt {attempt}: {e}")
 
-        print(f"✅ Image saved to {out_path}")
-        return True
+        if attempt < retries:
+            print(f"⏳ Waiting {delay} seconds before retry...")
+            time.sleep(delay)
 
-    except Exception as e:
-        print(f"❌ Pollinations failed: {e}")
-        return False
+    print("❌ Pollinations failed after all retries.")
+    return False
 
 # =========================
 # 1. GEMINI – SHORT, CLEAN TEXT
@@ -89,6 +99,7 @@ Rules:
 
     for model_name in models_to_try:
         try:
+            print(f"🤖 Trying Gemini model: {model_name}...")
             model = genai.GenerativeModel(model_name)
             result = model.generate_content(prompt)
 
@@ -109,7 +120,7 @@ Rules:
             return data
 
         except Exception as e:
-            print(f"⚠️ Model failed: {e}")
+            print(f"⚠️ Gemini model {model_name} failed: {e}")
             continue
 
     raise RuntimeError("❌ All Gemini models failed")
@@ -161,7 +172,7 @@ def render_video(image_path, quote):
         font_size = 58
         try:
             font = ImageFont.truetype(FONT_PATH, font_size)
-        except:
+        except Exception:
             font = ImageFont.load_default()
 
         wrapper = textwrap.TextWrapper(width=22)
@@ -196,7 +207,6 @@ def render_video(image_path, quote):
             bbox = draw.textbbox((0, 0), line, font=font)
             w = bbox[2] - bbox[0]
             x = box_x1 + (box_width - w) / 2
-
             draw.text((x, current_y), line, font=font, fill="white")
             current_y += line_height
 
@@ -229,7 +239,10 @@ def render_video(image_path, quote):
     finally:
         for f in ["temp_bg.png", "temp_overlay.png"]:
             if os.path.exists(f):
-                os.remove(f)
+                try:
+                    os.remove(f)
+                except Exception:
+                    pass
 
 # =========================
 # 3. YOUTUBE UPLOAD
@@ -278,30 +291,41 @@ def upload_to_youtube(video_file, title, description):
 # 4. MAIN
 # =========================
 if __name__ == "__main__":
-
+    # 1) Text from Gemini
     ai_content = get_ai_quote()
-    quote_text = ai_content["quote"]
-    title_text = ai_content["title"]
-    desc_text = ai_content["description"]
+    quote_text = ai_content.get("quote", "").strip()
+    title_text = ai_content.get("title", "Krishna Shorts 🦚").strip()
+    desc_text = ai_content.get("description", "Jai Shree Krishna #Krishna").strip()
 
+    if not quote_text:
+        print("❌ Empty quote from AI")
+        exit(1)
+
+    # 2) Image from Pollinations (with retries) or fallback to local image
     image_prompt = "beautiful baby Krishna devotional illustration, soft divine light, ultra realistic, 4k, cinematic"
     poll_ok = generate_krishna_image(image_prompt, GEN_IMAGE_FILE)
-    image_path = GEN_IMAGE_FILE
 
-    if not poll_ok:
+    if poll_ok:
+        image_path = GEN_IMAGE_FILE
+        print(f"🖼️ Using Pollinations image: {image_path}")
+    else:
+        print("⚠️ Using fallback local image from images/")
         images = [f for f in os.listdir(IMAGE_DIR) if f.lower().endswith((".jpg", ".png"))]
         if not images:
-            print("❌ No fallback images")
+            print("❌ No fallback images available.")
             exit(1)
-
         fallback = random.choice(images)
         image_path = os.path.join(IMAGE_DIR, fallback)
+        print(f"🖼️ Using local image: {image_path}")
 
+    # 3) Render video
     video = render_video(image_path, quote_text)
 
     if video:
         success = upload_to_youtube(video, title_text, desc_text)
         if success:
             print("✅ Reel uploaded successfully")
+        else:
+            print("⚠️ Upload failed.")
     else:
-        print("❌ Video failed")
+        print("❌ Video render failed.")
