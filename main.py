@@ -3,6 +3,7 @@ import random
 import shutil
 import textwrap
 import subprocess
+import imageio_ffmpeg
 import google.generativeai as genai
 from PIL import Image, ImageDraw, ImageFont
 from googleapiclient.discovery import build
@@ -186,9 +187,13 @@ def render_video(image_path, quote):
         # 4. FFmpeg Command (The "Glue")
         print("💾 Encoding Final Video with FFmpeg...")
         
+        # Get the actual path to the ffmpeg binary
+        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+        print(f"   Using FFmpeg at: {ffmpeg_exe}")
+
         # This command overlays the text on the bg, adds audio, and cuts to 58s max
         command = [
-            'ffmpeg',
+            ffmpeg_exe,
             '-y',                      # Overwrite output
             '-loop', '1',              # Loop image
             '-i', 'temp_bg.png',       # Input 0: Background
@@ -204,8 +209,13 @@ def render_video(image_path, quote):
             OUTPUT_FILE
         ]
         
-        subprocess.run(command, check=True)
+        # Run with error capturing
+        result = subprocess.run(command, capture_output=True, text=True)
         
+        if result.returncode != 0:
+            print(f"❌ FFmpeg Failed: {result.stderr}")
+            return None
+            
         print("✅ Video Rendered Successfully!")
         return OUTPUT_FILE
         
