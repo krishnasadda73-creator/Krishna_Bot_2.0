@@ -1,0 +1,7 @@
+google-generativeai
+moviepy==1.0.3
+imageio==2.4.1
+imageio-ffmpeg
+google-api-python-client
+google-auth-oauthlib
+google-auth-httplib2
