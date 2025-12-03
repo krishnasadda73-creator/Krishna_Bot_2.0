@@ -2,7 +2,6 @@ import os
 import random
 import shutil
 import textwrap
-import datetime
 import google.generativeai as genai
 from moviepy.editor import *
 from googleapiclient.discovery import build
@@ -20,24 +19,35 @@ OUTPUT_FILE = "short.mp4"
 def get_ai_quote(image_path):
     print(f"👁️ Vision AI Analyzing: {image_path}...")
     
-    # Configure Gemini
     genai.configure(api_key=os.environ["GEMINI_API_KEY"])
-    model = genai.GenerativeModel("gemini-1.5-flash")
     
-    myfile = genai.upload_file(image_path)
+    # 🛡️ SAFETY NET: Try specific version first, then fallback to others
+    models_to_try = ["gemini-1.5-flash-001", "gemini-1.5-flash", "gemini-1.5-pro"]
     
-    # The Prompt
-    prompt = """
-    You are a spiritual creator. Look at this image of Lord Krishna.
-    1. Identify the emotion (Peace, Love, Power, Wisdom).
-    2. Write a powerful, short HINDI spiritual quote (max 15 words) matching that emotion.
-    3. Output ONLY the Hindi text. No English, no hashtags.
-    """
-    
-    result = model.generate_content([myfile, prompt])
-    text = result.text.strip()
-    print(f"✨ Generated Quote: {text}")
-    return text
+    for model_name in models_to_try:
+        try:
+            print(f"🤖 Trying model: {model_name}...")
+            model = genai.GenerativeModel(model_name)
+            myfile = genai.upload_file(image_path)
+            
+            prompt = """
+            You are a spiritual creator. Look at this image of Lord Krishna.
+            1. Identify the emotion (Peace, Love, Power, Wisdom).
+            2. Write a powerful, short HINDI spiritual quote (max 15 words) matching that emotion.
+            3. Output ONLY the Hindi text. No English, no hashtags.
+            """
+            
+            result = model.generate_content([myfile, prompt])
+            text = result.text.strip()
+            print(f"✨ Generated Quote: {text}")
+            return text
+            
+        except Exception as e:
+            print(f"⚠️ Model {model_name} failed: {e}")
+            continue # Try the next model in the list
+            
+    print("❌ CRITICAL: All AI models failed. Check API Key.")
+    return None
 
 # --- 2. VIDEO ENGINE (THE EDITOR) ---
 def render_video(image_path, quote):
@@ -45,6 +55,10 @@ def render_video(image_path, quote):
     
     # 1. Pick Music
     bgm_files = [f for f in os.listdir(BGM_DIR) if f.endswith(".mp3")]
+    if not bgm_files:
+        print("❌ No BGM found!")
+        return None
+        
     selected_bgm = random.choice(bgm_files)
     print(f"🎵 Selected Music: {selected_bgm}")
     
@@ -65,9 +79,15 @@ def render_video(image_path, quote):
     wrapped_txt = "\n".join(wrapper.wrap(quote))
     
     # Generate Text Clip
-    txt_clip = TextClip(wrapped_txt, fontsize=75, color='white', font=FONT_PATH, method='label', align='center')
-    
-    # Position: Center X, Bottom Y (150px margin)
+    # Ensure FONT_PATH matches your uploaded file exactly
+    try:
+        txt_clip = TextClip(wrapped_txt, fontsize=75, color='white', font=FONT_PATH, method='label', align='center')
+    except Exception as e:
+        print(f"❌ Font Error: {e}")
+        # Fallback if custom font fails
+        txt_clip = TextClip(wrapped_txt, fontsize=75, color='white', font='Arial', method='label', align='center')
+
+    # Position: Center X, Bottom Y (200px margin from bottom)
     txt_x = 'center'
     txt_y = 1920 - txt_clip.h - 200 
     
@@ -102,12 +122,12 @@ def upload_to_youtube(video_file, quote):
             body={
                 "snippet": {
                     "title": f"{quote} #Krishna #Shorts",
-                    "description": "Jai Shree Krishna. Daily Motivation.",
+                    "description": "Jai Shree Krishna. Daily Motivation. #Krishna #Bhakti #Hinduism",
                     "tags": ["Krishna", "Bhakti", "Motivation", "Hinduism"],
                     "categoryId": "22"
                 },
                 "status": {
-                    "privacyStatus": "private", # KEEP PRIVATE FOR TESTING
+                    "privacyStatus": "private", # START WITH PRIVATE
                     "selfDeclaredMadeForKids": False
                 }
             },
@@ -138,14 +158,19 @@ if __name__ == "__main__":
     quote = get_ai_quote(full_path)
     
     if quote:
-        render_video(full_path, quote)
+        video_result = render_video(full_path, quote)
         
-        # 3. Upload (Only if render worked)
-        success = upload_to_youtube(OUTPUT_FILE, quote)
-        
-        # 4. Move to Used (Only if upload worked)
-        if success:
-            shutil.move(full_path, os.path.join(USED_DIR, target_image))
-            print(f"📦 Moved {target_image} to history folder.")
+        if video_result:
+            # 3. Upload (Only if render worked)
+            success = upload_to_youtube(video_result, quote)
+            
+            # 4. Move to Used (Only if upload worked)
+            if success:
+                shutil.move(full_path, os.path.join(USED_DIR, target_image))
+                print(f"📦 Moved {target_image} to history folder.")
+            else:
+                print("⚠️ Upload failed, keeping image for next time.")
         else:
-            print("⚠️ Upload failed, keeping image for next time.")
+            print("❌ Video rendering failed.")
+    else:
+        print("❌ AI Quote generation failed.")
