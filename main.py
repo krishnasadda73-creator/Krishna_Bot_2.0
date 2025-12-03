@@ -3,6 +3,13 @@ import random
 import shutil
 import textwrap
 import google.generativeai as genai
+
+# --- MONKEY PATCH FOR PILLOW 10.0.0+ CRASH (FIXES ANTIALIAS ERROR) ---
+import PIL.Image
+if not hasattr(PIL.Image, 'ANTIALIAS'):
+    PIL.Image.ANTIALIAS = PIL.Image.LANCZOS
+# ---------------------------------------------------------------------
+
 from moviepy.editor import *
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
