@@ -128,18 +128,20 @@ def render_video(image_path, quote):
         overlay = Image.new("RGBA", (base_width, base_height), (0, 0, 0, 0))
         draw = ImageDraw.Draw(overlay)
 
-        font_size = 85
+        # ----- MINIMALIST TEXT SETTINGS -----
+        font_size = 45  # Smaller font
         try:
             font = ImageFont.truetype(FONT_PATH, font_size)
         except:
             font = ImageFont.load_default()
 
-        wrapper = textwrap.TextWrapper(width=20)
+        wrapper = textwrap.TextWrapper(width=50) # Wider text
         lines = wrapper.wrap(quote)
 
-        line_height = font_size + 20
+        line_height = font_size + 10
         total_text_height = len(lines) * line_height
-        start_y = base_height - total_text_height - 350
+        # Move down closer to bottom edge (120px margin)
+        start_y = base_height - total_text_height - 120
 
         current_y = start_y
         for line in lines:
@@ -147,16 +149,12 @@ def render_video(image_path, quote):
             text_w = bbox[2] - bbox[0]
             text_x = (base_width - text_w) / 2
 
-            draw.text(
-                (text_x, current_y),
-                line,
-                font=font,
-                fill="white",
-                stroke_width=6,
-                stroke_fill="black"
-            )
+            # Subtle shadow instead of heavy stroke
+            draw.text((text_x + 2, current_y + 2), line, font=font, fill="black")
+            draw.text((text_x, current_y), line, font=font, fill="white")
 
             current_y += line_height
+        # ------------------------------------
 
         overlay.save("temp_overlay.png")
 
@@ -212,10 +210,10 @@ def upload_to_youtube(video_file, title, description):
         creds = Credentials(
             token=None,
             refresh_token=os.environ["YOUTUBE_REFRESH_TOKEN"],
-            token_uri="https://oauth2.googleapis.com/token",
+            token_uri="[https://oauth2.googleapis.com/token](https://oauth2.googleapis.com/token)",
             client_id=os.environ["YOUTUBE_CLIENT_ID"],
             client_secret=os.environ["YOUTUBE_CLIENT_SECRET"],
-            scopes=["https://www.googleapis.com/auth/youtube.upload"],
+            scopes=["[https://www.googleapis.com/auth/youtube.upload](https://www.googleapis.com/auth/youtube.upload)"],
         )
 
         youtube = build("youtube", "v3", credentials=creds)
