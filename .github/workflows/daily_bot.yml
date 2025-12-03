@@ -2,9 +2,12 @@ name: Krishna Reel Bot
 
 on:
   schedule:
-    # Runs at 2:00 UTC (which is 7:30 AM Indian Standard Time)
-    - cron: '0 2 * * *'
-  workflow_dispatch: # This line lets you click a "Run Now" button to test it
+    # 7:00 AM IST -> 1:30 AM UTC
+    - cron: '30 1 * * *'
+    # 7:00 PM IST -> 1:30 PM UTC
+    - cron: '30 13 * * *'
+  workflow_dispatch:
+ # This line lets you click a "Run Now" button to test it
 
 permissions:
   contents: write # REQUIRED to move the image to 'images_used'
