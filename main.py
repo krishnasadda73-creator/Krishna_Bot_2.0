@@ -4,16 +4,17 @@ import shutil
 import textwrap
 import subprocess
 import json
+import traceback
+
 import imageio_ffmpeg
 import google.generativeai as genai
 from PIL import Image, ImageDraw, ImageFont
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from google.oauth2.credentials import Credentials
-import traceback
 
 # =========================
-# ✅ BASE PATH & FOLDERS
+# CONFIG & FOLDERS
 # =========================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -23,26 +24,28 @@ BGM_DIR = os.path.join(BASE_DIR, "bgm")
 FONT_PATH = os.path.join(BASE_DIR, "fonts", "font.ttf")
 OUTPUT_FILE = os.path.join(BASE_DIR, "short.mp4")
 
+# Ensure folders exist
 for folder in [IMAGE_DIR, USED_DIR, BGM_DIR, os.path.dirname(FONT_PATH)]:
     if folder and not os.path.exists(folder):
         os.makedirs(folder, exist_ok=True)
 
+
 # =========================
-# ✅ 1. VISION AI
+# 1. VISION AI
 # =========================
 def get_ai_quote(image_path):
     print(f"👁️ Vision AI Analyzing: {image_path}...")
 
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        raise RuntimeError("❌ GEMINI_API_KEY missing!")
+        raise RuntimeError("❌ GEMINI_API_KEY is missing!")
 
     genai.configure(api_key=api_key)
 
     models_to_try = [
         "gemini-2.5-flash",
         "gemini-2.0-flash",
-        "gemini-1.5-flash"
+        "gemini-1.5-flash",
     ]
 
     for model_name in models_to_try:
@@ -52,27 +55,29 @@ def get_ai_quote(image_path):
             myfile = genai.upload_file(image_path)
 
             prompt = """
-You are a Bhakti poet and devotee of Lord Krishna.
-Generate a valid JSON object with exactly:
-- "quote": 2-line Hindi shayari, max 10–12 words, no emojis.
-- "title": Viral YouTube Short title with emojis.
-- "description": Caption with emojis + 5–6 hashtags.
-Output STRICT JSON only.
+You are a Bhakti poet and devotee of Lord Krishna. Look at this image.
+Generate a valid JSON object with exactly these 3 fields:
+- "quote": A 2-line Hindi Shayari/Quote. Rhyming, deep, natural. Max 10-12 words. NO EMOJIS.
+- "title": A viral, catchy YouTube Short title (Hindi + English mix) with cute emojis.
+- "description": A beautiful, heart-touching caption with emojis + 5-6 relevant hashtags.
+Output strictly valid JSON only. No markdown.
 """
 
             result = model.generate_content([myfile, prompt])
             raw = result.text.strip()
 
+            # Remove possible ```json fences
             if raw.startswith("```"):
                 raw = raw.replace("```json", "").replace("```", "")
 
+            # Extract JSON between first { and last }
             start = raw.find("{")
             end = raw.rfind("}") + 1
+            if start == -1 or end == 0:
+                raise ValueError("No JSON object found in model output")
 
-            if start == -1 or end == -1:
-                raise ValueError("No JSON in output")
-
-            data = json.loads(raw[start:end])
+            json_text = raw[start:end]
+            data = json.loads(json_text)
 
             print("✨ AI Generated:")
             print("Quote:", data.get("quote"))
@@ -81,26 +86,29 @@ Output STRICT JSON only.
             return data
 
         except Exception as e:
-            print(f"⚠️ Model failed: {e}")
+            print(f"⚠️ Model {model_name} failed: {e}")
             continue
 
-    raise RuntimeError("❌ All Gemini models failed")
+    raise RuntimeError("❌ All Gemini models failed in get_ai_quote")
+
 
 # =========================
-# ✅ 2. VIDEO ENGINE
+# 2. VIDEO ENGINE (BABY-KRISHNA STYLE BOTTOM TEXT)
 # =========================
 def render_video(image_path, quote):
     print("🎬 Rendering Video...")
 
     try:
-        bgm_files = [f for f in os.listdir(BGM_DIR) if f.endswith(".mp3")]
+        # --- 1. Pick BGM ---
+        bgm_files = [f for f in os.listdir(BGM_DIR) if f.lower().endswith(".mp3")]
         if not bgm_files:
-            print("❌ No BGM found!")
+            print("❌ No BGM found in bgm/ folder!")
             return None
 
         bgm_path = os.path.join(BGM_DIR, random.choice(bgm_files))
         print(f"🎵 Selected Music: {os.path.basename(bgm_path)}")
 
+        # --- 2. Prepare 1080x1920 Background ---
         base_width = 1080
         base_height = 1920
 
@@ -125,53 +133,98 @@ def render_video(image_path, quote):
             img = img.crop((left, top, right, bottom))
             img.save("temp_bg.png")
 
+        # --- 3. Minimal Bottom Text Style ---
         overlay = Image.new("RGBA", (base_width, base_height), (0, 0, 0, 0))
         draw = ImageDraw.Draw(overlay)
 
-        # ----- MINIMALIST TEXT SETTINGS -----
-        font_size = 45  # Smaller font
+        # Smaller, softer font
+        font_size = 64
         try:
             font = ImageFont.truetype(FONT_PATH, font_size)
-        except:
+        except Exception:
             font = ImageFont.load_default()
 
-        wrapper = textwrap.TextWrapper(width=50) # Wider text
-        lines = wrapper.wrap(quote)
+        # Compact text: we expect 1–2 short lines
+        wrapper = textwrap.TextWrapper(width=25)
+        lines = wrapper.wrap(quote.strip())
 
-        line_height = font_size + 10
-        total_text_height = len(lines) * line_height
-        # Move down closer to bottom edge (120px margin)
-        start_y = base_height - total_text_height - 120
+        if not lines:
+            print("⚠️ Empty quote for overlay")
+            return None
 
-        current_y = start_y
+        # Measure text block
+        line_height = font_size + 8
+        text_height = len(lines) * line_height
+        max_text_width = 0
+        for line in lines:
+            bbox = draw.textbbox((0, 0), line, font=font)
+            w = bbox[2] - bbox[0]
+            if w > max_text_width:
+                max_text_width = w
+
+        # Bottom rounded bar (like your baby Krishna short)
+        padding_x = 60
+        padding_y = 25
+        box_width = max_text_width + 2 * padding_x
+        box_height = text_height + 2 * padding_y
+
+        box_x1 = (base_width - box_width) / 2
+        # Lift a bit above absolute bottom so YT UI doesn’t cover it
+        box_y1 = base_height - box_height - 220
+        box_x2 = box_x1 + box_width
+        box_y2 = box_y1 + box_height
+
+        # Semi-transparent black rounded rectangle
+        draw.rounded_rectangle(
+            (box_x1, box_y1, box_x2, box_y2),
+            radius=40,
+            fill=(0, 0, 0, 170),  # 170/255 opacity
+        )
+
+        # Centered white text inside the bar
+        current_y = box_y1 + padding_y
         for line in lines:
             bbox = draw.textbbox((0, 0), line, font=font)
             text_w = bbox[2] - bbox[0]
-            text_x = (base_width - text_w) / 2
+            text_x = box_x1 + (box_width - text_w) / 2
 
-            # Subtle shadow instead of heavy stroke
-            draw.text((text_x + 2, current_y + 2), line, font=font, fill="black")
-            draw.text((text_x, current_y), line, font=font, fill="white")
-
+            draw.text(
+                (text_x, current_y),
+                line,
+                font=font,
+                fill="white",
+            )
             current_y += line_height
-        # ------------------------------------
 
         overlay.save("temp_overlay.png")
 
+        # --- 4. Encode Final Video with FFmpeg ---
         ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
-
         command = [
-            ffmpeg_exe, "-y",
-            "-loop", "1", "-i", "temp_bg.png",
-            "-i", "temp_overlay.png",
-            "-i", bgm_path,
-            "-filter_complex", "[0:v][1:v]overlay=0:0[v]",
-            "-map", "[v]", "-map", "2:a",
-            "-t", "58",
-            "-c:v", "libx264",
-            "-pix_fmt", "yuv420p",
+            ffmpeg_exe,
+            "-y",
+            "-loop",
+            "1",
+            "-i",
+            "temp_bg.png",
+            "-i",
+            "temp_overlay.png",
+            "-i",
+            bgm_path,
+            "-filter_complex",
+            "[0:v][1:v]overlay=0:0[v]",
+            "-map",
+            "[v]",
+            "-map",
+            "2:a",
+            "-t",
+            "58",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
             "-shortest",
-            OUTPUT_FILE
+            OUTPUT_FILE,
         ]
 
         subprocess.run(command, capture_output=True, check=True)
@@ -187,11 +240,12 @@ def render_video(image_path, quote):
             if os.path.exists(f):
                 try:
                     os.remove(f)
-                except:
+                except Exception:
                     pass
 
+
 # =========================
-# ✅ 3. YOUTUBE UPLOAD (FIXED)
+# 3. YOUTUBE UPLOAD
 # =========================
 def upload_to_youtube(video_file, title, description):
     print("🚀 Uploading to YouTube...")
@@ -210,10 +264,10 @@ def upload_to_youtube(video_file, title, description):
         creds = Credentials(
             token=None,
             refresh_token=os.environ["YOUTUBE_REFRESH_TOKEN"],
-            token_uri="[https://oauth2.googleapis.com/token](https://oauth2.googleapis.com/token)",
+            token_uri="https://oauth2.googleapis.com/token",
             client_id=os.environ["YOUTUBE_CLIENT_ID"],
             client_secret=os.environ["YOUTUBE_CLIENT_SECRET"],
-            scopes=["[https://www.googleapis.com/auth/youtube.upload](https://www.googleapis.com/auth/youtube.upload)"],
+            scopes=["https://www.googleapis.com/auth/youtube.upload"],
         )
 
         youtube = build("youtube", "v3", credentials=creds)
@@ -224,15 +278,15 @@ def upload_to_youtube(video_file, title, description):
                 "snippet": {
                     "title": title,
                     "description": description,
-                    "tags": ["Krishna", "Bhakti", "Motivation", "Hinduism", "Shorts"],
-                    "categoryId": "22"
+                    "tags": ["Krishna", "Bhakti", "Motivation", "Hinduism", "RadhaKrishna", "Shorts"],
+                    "categoryId": "22",
                 },
                 "status": {
                     "privacyStatus": "public",
-                    "selfDeclaredMadeForKids": False
-                }
+                    "selfDeclaredMadeForKids": False,
+                },
             },
-            media_body=MediaFileUpload(video_file)
+            media_body=MediaFileUpload(video_file),
         )
 
         response = request.execute()
@@ -244,11 +298,11 @@ def upload_to_youtube(video_file, title, description):
         traceback.print_exc()
         return False
 
+
 # =========================
-# ✅ MAIN EXECUTION
+# 4. MAIN EXECUTION
 # =========================
 if __name__ == "__main__":
-
     images = [f for f in os.listdir(IMAGE_DIR) if f.lower().endswith((".jpg", ".png"))]
 
     if not images:
@@ -274,7 +328,6 @@ if __name__ == "__main__":
 
     if video:
         success = upload_to_youtube(video, title_text, desc_text)
-
         if success:
             shutil.move(full_path, os.path.join(USED_DIR, target_image))
             print("📦 Image moved to images_used/")
