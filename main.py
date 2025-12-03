@@ -2,15 +2,9 @@ import os
 import random
 import shutil
 import textwrap
+import subprocess
 import google.generativeai as genai
-
-# --- MONKEY PATCH FOR PILLOW 10.0.0+ CRASH (FIXES ANTIALIAS ERROR) ---
-import PIL.Image
-if not hasattr(PIL.Image, 'ANTIALIAS'):
-    PIL.Image.ANTIALIAS = PIL.Image.LANCZOS
-# ---------------------------------------------------------------------
-
-from moviepy.editor import *
+from PIL import Image, ImageDraw, ImageFont
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from google.oauth2.credentials import Credentials
@@ -84,9 +78,9 @@ def get_ai_quote(image_path):
     print("❌ CRITICAL: All AI models failed. Please check the logs above to see which models are available.")
     exit(1)
 
-# --- 2. VIDEO ENGINE (THE EDITOR - STABILIZED) ---
+# --- 2. VIDEO ENGINE (FFMPEG + PIL) ---
 def render_video(image_path, quote):
-    print("🎬 Rendering Video...")
+    print("🎬 Rendering Video with Direct FFmpeg...")
     
     try:
         # 1. Pick Music
@@ -96,68 +90,121 @@ def render_video(image_path, quote):
             return None
             
         selected_bgm = random.choice(bgm_files)
+        bgm_path = os.path.join(BGM_DIR, selected_bgm)
         print(f"🎵 Selected Music: {selected_bgm}")
-        
-        # 2. Audio Setup (Safe Load)
-        audio = AudioFileClip(os.path.join(BGM_DIR, selected_bgm))
-        duration = min(audio.duration, 58.0)
-        audio = audio.subclip(0, duration)
-        
-        # 3. Image Setup (MANUAL RESIZE TO PREVENT CRASH)
-        print("🖼️ Resizing Image Safely...")
-        try:
-            pil_img = PIL.Image.open(image_path)
-            # Resize logic: fit to height 1920, maintain aspect ratio
-            base_height = 1920
-            w_percent = (base_height / float(pil_img.size[1]))
-            w_size = int((float(pil_img.size[0]) * float(w_percent)))
-            pil_img = pil_img.resize((w_size, base_height), PIL.Image.LANCZOS)
-            
-            # Save temp file
-            temp_img = "temp_resized.png"
-            pil_img.save(temp_img)
-            
-            # Load into MoviePy
-            clip = ImageClip(temp_img)
-        except Exception as e:
-            print(f"❌ Image Resize Failed: {e}")
-            # Fallback to raw load if manual resize fails
-            clip = ImageClip(image_path)
 
-        # Center Crop to 9:16 (1080x1920)
-        clip = clip.crop(x1=clip.w/2 - 540, y1=0, width=1080, height=1920)
-        clip = clip.set_duration(duration)
+        # 2. Prepare Background Image (Resize & Crop using PIL)
+        print("🖼️ Processing Background Image...")
+        base_width = 1080
+        base_height = 1920
         
-        # 4. Text Setup
-        print("✍️ Generating Text...")
+        with Image.open(image_path) as img:
+            # Resize Logic: Cover the area
+            img_ratio = img.width / img.height
+            target_ratio = base_width / base_height
+            
+            if img_ratio > target_ratio:
+                # Too wide: fit height, crop width
+                new_height = base_height
+                new_width = int(new_height * img_ratio)
+            else:
+                # Too tall: fit width, crop height
+                new_width = base_width
+                new_height = int(new_width / img_ratio)
+                
+            img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            
+            # Center Crop
+            left = (new_width - base_width) / 2
+            top = (new_height - base_height) / 2
+            right = (new_width + base_width) / 2
+            bottom = (new_height + base_height) / 2
+            img = img.crop((left, top, right, bottom))
+            
+            # Save Background Temp
+            img.save("temp_bg.png")
+
+        # 3. Create Text Overlay (Transparent PNG)
+        print("✍️ Creating Text Overlay...")
+        overlay = Image.new('RGBA', (base_width, base_height), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(overlay)
+        
+        # Font Setup
+        font_size = 75
+        try:
+            font = ImageFont.truetype(FONT_PATH, font_size)
+        except:
+            print("⚠️ Custom font failed, attempting default.")
+            try:
+                # Try to find a system font or generic path if FONT_PATH fails
+                font = ImageFont.truetype("arial.ttf", font_size) 
+            except:
+                 font = ImageFont.load_default()
+
+        # Wrap Text
         wrapper = textwrap.TextWrapper(width=25)
-        wrapped_txt = "\n".join(wrapper.wrap(quote))
+        lines = wrapper.wrap(quote)
         
-        # Font Logic with Fallback
-        font_to_use = FONT_PATH
-        if not os.path.exists(FONT_PATH):
-            print(f"⚠️ Font file not found at {FONT_PATH}, using default.")
-            font_to_use = 'Arial'
+        # Calculate Text Height block
+        # We estimate height based on font size + padding
+        line_height = font_size + 15
+        total_text_height = len(lines) * line_height
+        
+        # Position: Bottom (with 200px margin)
+        start_y = base_height - total_text_height - 250
+        
+        # Draw Shadow Box first
+        padding = 40
+        box_top = start_y - padding
+        box_bottom = start_y + total_text_height + padding
+        # We want the box to be centered and wide enough for the widest line
+        max_line_width = 0
+        for line in lines:
+            bbox = draw.textbbox((0, 0), line, font=font)
+            width = bbox[2] - bbox[0]
+            if width > max_line_width:
+                max_line_width = width
+                
+        box_left = (base_width - max_line_width) / 2 - padding
+        box_right = (base_width + max_line_width) / 2 + padding
+        
+        draw.rectangle([box_left, box_top, box_right, box_bottom], fill=(0, 0, 0, 160))
 
-        try:
-            txt_clip = TextClip(wrapped_txt, fontsize=75, color='white', font=font_to_use, method='label', align='center')
-        except Exception as e:
-            print(f"⚠️ Text generation failed ({e}), trying generic font.")
-            txt_clip = TextClip(wrapped_txt, fontsize=75, color='white', font='Arial', method='label', align='center')
+        # Draw Text
+        current_y = start_y
+        for line in lines:
+            # Center text horizontally
+            bbox = draw.textbbox((0, 0), line, font=font)
+            text_w = bbox[2] - bbox[0]
+            text_x = (base_width - text_w) / 2
+            
+            draw.text((text_x, current_y), line, font=font, fill="white")
+            current_y += line_height
+            
+        overlay.save("temp_overlay.png")
 
-        # Positioning
-        txt_x = 'center'
-        txt_y = 1920 - txt_clip.h - 200 
-        txt_clip = txt_clip.set_position((txt_x, txt_y)).set_duration(duration)
+        # 4. FFmpeg Command (The "Glue")
+        print("💾 Encoding Final Video with FFmpeg...")
         
-        # Shadow Box
-        shadow = ColorClip(size=(txt_clip.w + 60, txt_clip.h + 40), color=(0,0,0)).set_opacity(0.6)
-        shadow = shadow.set_position(('center', txt_y - 20)).set_duration(duration)
+        # This command overlays the text on the bg, adds audio, and cuts to 58s max
+        command = [
+            'ffmpeg',
+            '-y',                      # Overwrite output
+            '-loop', '1',              # Loop image
+            '-i', 'temp_bg.png',       # Input 0: Background
+            '-i', 'temp_overlay.png',  # Input 1: Text Overlay
+            '-i', bgm_path,            # Input 2: Audio
+            '-filter_complex', '[0:v][1:v]overlay=0:0[v]', # Combine images
+            '-map', '[v]',             # Use combined video
+            '-map', '2:a',             # Use audio file
+            '-t', '58',                # Max duration 58s
+            '-c:v', 'libx264',         # H.264 Video Codec
+            '-pix_fmt', 'yuv420p',     # Pixel format for compatibility
+            '-shortest',               # Stop if audio is shorter than 58s
+            OUTPUT_FILE
+        ]
         
-        # 5. Combine & Write
-        print("💾 Saving MP4 file...")
-        final = CompositeVideoClip([clip, shadow, txt_clip]).set_audio(audio)
-        final.write_videofile(OUTPUT_FILE, fps=24, codec="libx264", audio_codec="aac")
+        subprocess.run(command, check=True)
         
         print("✅ Video Rendered Successfully!")
         return OUTPUT_FILE
