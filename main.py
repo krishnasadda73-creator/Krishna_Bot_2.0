@@ -17,7 +17,7 @@ BGM_DIR = "bgm"
 FONT_PATH = "fonts/font.ttf" 
 OUTPUT_FILE = "short.mp4"
 
-# --- 1. VISION AI (THE DIAGNOSTIC WRITER) ---
+# --- 1. VISION AI (THE POETIC WRITER) ---
 def get_ai_quote(image_path):
     print(f"👁️ Vision AI Analyzing: {image_path}...")
     
@@ -26,30 +26,12 @@ def get_ai_quote(image_path):
         print("❌ ERROR: GEMINI_API_KEY is missing from Secrets!")
         exit(1)
 
-    # DIAGNOSTIC: Print first 4 chars to verify key update
-    print(f"🔑 Using API Key starting with: {api_key[:4]}...")
-
     genai.configure(api_key=api_key)
     
-    # DIAGNOSTIC: List available models for this specific key
-    print("📋 Checking available models for this Project...")
-    try:
-        found_any = False
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                print(f"   - Found model: {m.name}")
-                found_any = True
-        if not found_any:
-            print("   ⚠️ No text generation models found! (Generative Language API might be OFF)")
-    except Exception as e:
-        print(f"❌ Could not list models. Error: {e}")
-        print("   (This usually means the API Key is invalid or the Project is deleted)")
-
-    # 🛡️ SAFETY NET: Updated to match your available models (2.5 and 2.0)
+    # 🛡️ SAFETY NET: Models list
     models_to_try = [
         "gemini-2.5-flash", 
         "gemini-2.0-flash", 
-        "gemini-2.0-flash-exp",
         "gemini-1.5-flash",
         "gemini-pro"
     ]
@@ -60,11 +42,14 @@ def get_ai_quote(image_path):
             model = genai.GenerativeModel(model_name)
             myfile = genai.upload_file(image_path)
             
+            # --- UPDATED PROMPT FOR NATURAL RHYTHM ---
             prompt = """
-            You are a spiritual creator. Look at this image of Lord Krishna.
-            1. Identify the emotion (Peace, Love, Power, Wisdom).
-            2. Write a powerful, short HINDI spiritual quote (max 15 words) matching that emotion.
-            3. Output ONLY the Hindi text. No English, no hashtags.
+            You are a Bhakti poet and devotee of Lord Krishna. Look at this image.
+            1. Feel the emotion (Vatsalya, Viraha, Prem, Shakti).
+            2. Write a 2-line Hindi Shayari or poetic quote that rhymes.
+            3. It should sound natural, heart-touching, and deep (not like a robot translation).
+            4. Keep it short (max 12-15 words).
+            5. Output ONLY the Hindi text. No English, no emojis.
             """
             
             result = model.generate_content([myfile, prompt])
@@ -74,9 +59,9 @@ def get_ai_quote(image_path):
             
         except Exception as e:
             print(f"⚠️ Model {model_name} failed: {e}")
-            continue # Try the next model
+            continue 
             
-    print("❌ CRITICAL: All AI models failed. Please check the logs above to see which models are available.")
+    print("❌ CRITICAL: All AI models failed.")
     exit(1)
 
 # --- 2. VIDEO ENGINE (FFMPEG + PIL) ---
@@ -94,71 +79,60 @@ def render_video(image_path, quote):
         bgm_path = os.path.join(BGM_DIR, selected_bgm)
         print(f"🎵 Selected Music: {selected_bgm}")
 
-        # 2. Prepare Background Image (Resize & Crop using PIL)
+        # 2. Prepare Background Image
         print("🖼️ Processing Background Image...")
         base_width = 1080
         base_height = 1920
         
         with Image.open(image_path) as img:
-            # Resize Logic: Cover the area
             img_ratio = img.width / img.height
             target_ratio = base_width / base_height
             
             if img_ratio > target_ratio:
-                # Too wide: fit height, crop width
                 new_height = base_height
                 new_width = int(new_height * img_ratio)
             else:
-                # Too tall: fit width, crop height
                 new_width = base_width
                 new_height = int(new_width / img_ratio)
                 
             img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
             
-            # Center Crop
             left = (new_width - base_width) / 2
             top = (new_height - base_height) / 2
             right = (new_width + base_width) / 2
             bottom = (new_height + base_height) / 2
             img = img.crop((left, top, right, bottom))
-            
-            # Save Background Temp
             img.save("temp_bg.png")
 
-        # 3. Create Text Overlay (Transparent PNG)
+        # 3. Create Text Overlay
         print("✍️ Creating Text Overlay...")
         overlay = Image.new('RGBA', (base_width, base_height), (0, 0, 0, 0))
         draw = ImageDraw.Draw(overlay)
         
-        # Font Setup
         font_size = 75
         try:
             font = ImageFont.truetype(FONT_PATH, font_size)
         except:
             print("⚠️ Custom font failed, attempting default.")
             try:
-                # Try to find a system font or generic path if FONT_PATH fails
                 font = ImageFont.truetype("arial.ttf", font_size) 
             except:
                  font = ImageFont.load_default()
 
-        # Wrap Text
-        wrapper = textwrap.TextWrapper(width=25)
+        wrapper = textwrap.TextWrapper(width=22) # Made slightly narrower for better shape
         lines = wrapper.wrap(quote)
         
-        # Calculate Text Height block
-        # We estimate height based on font size + padding
         line_height = font_size + 15
         total_text_height = len(lines) * line_height
         
-        # Position: Bottom (with 200px margin)
-        start_y = base_height - total_text_height - 250
+        # Position: Bottom area
+        start_y = base_height - total_text_height - 300
         
-        # Draw Shadow Box first
+        # --- IMPROVED VISIBILITY (Darker Box) ---
         padding = 40
         box_top = start_y - padding
         box_bottom = start_y + total_text_height + padding
-        # We want the box to be centered and wide enough for the widest line
+        
         max_line_width = 0
         for line in lines:
             bbox = draw.textbbox((0, 0), line, font=font)
@@ -169,63 +143,47 @@ def render_video(image_path, quote):
         box_left = (base_width - max_line_width) / 2 - padding
         box_right = (base_width + max_line_width) / 2 + padding
         
-        draw.rectangle([box_left, box_top, box_right, box_bottom], fill=(0, 0, 0, 160))
+        # INCREASED OPACITY: (0, 0, 0, 215) -> Much darker background for better reading
+        draw.rectangle([box_left, box_top, box_right, box_bottom], fill=(0, 0, 0, 215))
 
         # Draw Text
         current_y = start_y
         for line in lines:
-            # Center text horizontally
             bbox = draw.textbbox((0, 0), line, font=font)
             text_w = bbox[2] - bbox[0]
             text_x = (base_width - text_w) / 2
-            
+            # Added a slight black outline to text for extra pop
+            draw.text((text_x+2, current_y+2), line, font=font, fill="black") 
             draw.text((text_x, current_y), line, font=font, fill="white")
             current_y += line_height
             
         overlay.save("temp_overlay.png")
 
-        # 4. FFmpeg Command (The "Glue")
+        # 4. FFmpeg Command
         print("💾 Encoding Final Video with FFmpeg...")
-        
-        # Get the actual path to the ffmpeg binary
         ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
-        print(f"   Using FFmpeg at: {ffmpeg_exe}")
-
-        # This command overlays the text on the bg, adds audio, and cuts to 58s max
+        
         command = [
-            ffmpeg_exe,
-            '-y',                      # Overwrite output
-            '-loop', '1',              # Loop image
-            '-i', 'temp_bg.png',       # Input 0: Background
-            '-i', 'temp_overlay.png',  # Input 1: Text Overlay
-            '-i', bgm_path,            # Input 2: Audio
-            '-filter_complex', '[0:v][1:v]overlay=0:0[v]', # Combine images
-            '-map', '[v]',             # Use combined video
-            '-map', '2:a',             # Use audio file
-            '-t', '58',                # Max duration 58s
-            '-c:v', 'libx264',         # H.264 Video Codec
-            '-pix_fmt', 'yuv420p',     # Pixel format for compatibility
-            '-shortest',               # Stop if audio is shorter than 58s
+            ffmpeg_exe, '-y',
+            '-loop', '1', '-i', 'temp_bg.png',
+            '-i', 'temp_overlay.png',
+            '-i', bgm_path,
+            '-filter_complex', '[0:v][1:v]overlay=0:0[v]',
+            '-map', '[v]', '-map', '2:a',
+            '-t', '58', '-c:v', 'libx264',
+            '-pix_fmt', 'yuv420p', '-shortest',
             OUTPUT_FILE
         ]
         
-        # Run with error capturing
-        result = subprocess.run(command, capture_output=True, text=True)
-        
-        if result.returncode != 0:
-            print(f"❌ FFmpeg Failed: {result.stderr}")
-            return None
-            
+        subprocess.run(command, capture_output=True, check=True)
         print("✅ Video Rendered Successfully!")
         return OUTPUT_FILE
         
     except Exception as e:
-        print(f"❌ CRITICAL RENDER ERROR: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"❌ RENDER ERROR: {e}")
         return None
 
-# --- 3. YOUTUBE UPLOAD (THE COURIER) ---
+# --- 3. YOUTUBE UPLOAD (PUBLIC) ---
 def upload_to_youtube(video_file, quote):
     print("🚀 Uploading to YouTube...")
     try:
@@ -244,10 +202,11 @@ def upload_to_youtube(video_file, quote):
                 "snippet": {
                     "title": f"{quote} #Krishna #Shorts",
                     "description": "Jai Shree Krishna. Daily Motivation. #Bhakti #Hinduism",
-                    "tags": ["Krishna", "Bhakti", "Motivation", "Hinduism"],
+                    "tags": ["Krishna", "Bhakti", "Motivation", "Hinduism", "RadhaKrishna"],
                     "categoryId": "22"
                 },
-                "status": {"privacyStatus": "private", "selfDeclaredMadeForKids": False}
+                # --- CHANGED TO PUBLIC ---
+                "status": {"privacyStatus": "public", "selfDeclaredMadeForKids": False}
             },
             media_body=MediaFileUpload(video_file)
         )
@@ -270,7 +229,6 @@ if __name__ == "__main__":
     full_path = os.path.join(IMAGE_DIR, target_image)
     print(f"🖼️ Processing: {target_image}")
     
-    # Run Flow
     quote = get_ai_quote(full_path)
     
     if quote:
