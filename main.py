@@ -43,8 +43,14 @@ def get_ai_quote(image_path):
         print(f"❌ Could not list models. Error: {e}")
         print("   (This usually means the API Key is invalid or the Project is deleted)")
 
-    # 🛡️ SAFETY NET: Try every possible model name
-    models_to_try = ["gemini-1.5-flash", "gemini-1.5-flash-001", "gemini-1.5-pro", "gemini-pro"]
+    # 🛡️ SAFETY NET: Updated to match your available models (2.5 and 2.0)
+    models_to_try = [
+        "gemini-2.5-flash", 
+        "gemini-2.0-flash", 
+        "gemini-2.0-flash-exp",
+        "gemini-1.5-flash",
+        "gemini-pro"
+    ]
     
     for model_name in models_to_try:
         try:
