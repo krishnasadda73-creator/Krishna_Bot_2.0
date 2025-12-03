@@ -84,52 +84,89 @@ def get_ai_quote(image_path):
     print("❌ CRITICAL: All AI models failed. Please check the logs above to see which models are available.")
     exit(1)
 
-# --- 2. VIDEO ENGINE (THE EDITOR) ---
+# --- 2. VIDEO ENGINE (THE EDITOR - STABILIZED) ---
 def render_video(image_path, quote):
     print("🎬 Rendering Video...")
     
-    bgm_files = [f for f in os.listdir(BGM_DIR) if f.endswith(".mp3")]
-    if not bgm_files:
-        print("❌ No BGM found!")
-        return None
-        
-    selected_bgm = random.choice(bgm_files)
-    print(f"🎵 Selected Music: {selected_bgm}")
-    
-    audio = AudioFileClip(os.path.join(BGM_DIR, selected_bgm))
-    
-    # Duration Logic (Max 58s)
-    duration = min(audio.duration, 58.0)
-    audio = audio.subclip(0, duration)
-    
-    # Image Logic (Crop 9:16)
-    clip = ImageClip(image_path).resize(height=1920)
-    clip = clip.crop(x1=clip.w/2 - 540, y1=0, width=1080, height=1920)
-    clip = clip.set_duration(duration)
-    
-    # Text Logic
-    wrapper = textwrap.TextWrapper(width=25)
-    wrapped_txt = "\n".join(wrapper.wrap(quote))
-    
-    # Font Fallback System
     try:
-        txt_clip = TextClip(wrapped_txt, fontsize=75, color='white', font=FONT_PATH, method='label', align='center')
-    except Exception as e:
-        print(f"⚠️ Custom font failed ({e}), using default Arial.")
-        txt_clip = TextClip(wrapped_txt, fontsize=75, color='white', font='Arial', method='label', align='center')
+        # 1. Pick Music
+        bgm_files = [f for f in os.listdir(BGM_DIR) if f.endswith(".mp3")]
+        if not bgm_files:
+            print("❌ No BGM found!")
+            return None
+            
+        selected_bgm = random.choice(bgm_files)
+        print(f"🎵 Selected Music: {selected_bgm}")
+        
+        # 2. Audio Setup (Safe Load)
+        audio = AudioFileClip(os.path.join(BGM_DIR, selected_bgm))
+        duration = min(audio.duration, 58.0)
+        audio = audio.subclip(0, duration)
+        
+        # 3. Image Setup (MANUAL RESIZE TO PREVENT CRASH)
+        print("🖼️ Resizing Image Safely...")
+        try:
+            pil_img = PIL.Image.open(image_path)
+            # Resize logic: fit to height 1920, maintain aspect ratio
+            base_height = 1920
+            w_percent = (base_height / float(pil_img.size[1]))
+            w_size = int((float(pil_img.size[0]) * float(w_percent)))
+            pil_img = pil_img.resize((w_size, base_height), PIL.Image.LANCZOS)
+            
+            # Save temp file
+            temp_img = "temp_resized.png"
+            pil_img.save(temp_img)
+            
+            # Load into MoviePy
+            clip = ImageClip(temp_img)
+        except Exception as e:
+            print(f"❌ Image Resize Failed: {e}")
+            # Fallback to raw load if manual resize fails
+            clip = ImageClip(image_path)
 
-    # Positioning (Bottom)
-    txt_x = 'center'
-    txt_y = 1920 - txt_clip.h - 200 
-    txt_clip = txt_clip.set_position((txt_x, txt_y)).set_duration(duration)
-    
-    # Shadow Box
-    shadow = ColorClip(size=(txt_clip.w + 60, txt_clip.h + 40), color=(0,0,0)).set_opacity(0.6)
-    shadow = shadow.set_position(('center', txt_y - 20)).set_duration(duration)
-    
-    final = CompositeVideoClip([clip, shadow, txt_clip]).set_audio(audio)
-    final.write_videofile(OUTPUT_FILE, fps=24, codec="libx264", audio_codec="aac")
-    return OUTPUT_FILE
+        # Center Crop to 9:16 (1080x1920)
+        clip = clip.crop(x1=clip.w/2 - 540, y1=0, width=1080, height=1920)
+        clip = clip.set_duration(duration)
+        
+        # 4. Text Setup
+        print("✍️ Generating Text...")
+        wrapper = textwrap.TextWrapper(width=25)
+        wrapped_txt = "\n".join(wrapper.wrap(quote))
+        
+        # Font Logic with Fallback
+        font_to_use = FONT_PATH
+        if not os.path.exists(FONT_PATH):
+            print(f"⚠️ Font file not found at {FONT_PATH}, using default.")
+            font_to_use = 'Arial'
+
+        try:
+            txt_clip = TextClip(wrapped_txt, fontsize=75, color='white', font=font_to_use, method='label', align='center')
+        except Exception as e:
+            print(f"⚠️ Text generation failed ({e}), trying generic font.")
+            txt_clip = TextClip(wrapped_txt, fontsize=75, color='white', font='Arial', method='label', align='center')
+
+        # Positioning
+        txt_x = 'center'
+        txt_y = 1920 - txt_clip.h - 200 
+        txt_clip = txt_clip.set_position((txt_x, txt_y)).set_duration(duration)
+        
+        # Shadow Box
+        shadow = ColorClip(size=(txt_clip.w + 60, txt_clip.h + 40), color=(0,0,0)).set_opacity(0.6)
+        shadow = shadow.set_position(('center', txt_y - 20)).set_duration(duration)
+        
+        # 5. Combine & Write
+        print("💾 Saving MP4 file...")
+        final = CompositeVideoClip([clip, shadow, txt_clip]).set_audio(audio)
+        final.write_videofile(OUTPUT_FILE, fps=24, codec="libx264", audio_codec="aac")
+        
+        print("✅ Video Rendered Successfully!")
+        return OUTPUT_FILE
+        
+    except Exception as e:
+        print(f"❌ CRITICAL RENDER ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
 
 # --- 3. YOUTUBE UPLOAD (THE COURIER) ---
 def upload_to_youtube(video_file, quote):
