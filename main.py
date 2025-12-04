@@ -1,12 +1,10 @@
 import os
 import random
+import shutil
 import textwrap
 import subprocess
 import json
 import traceback
-import requests
-import urllib.parse
-import time  # for retry delays
 
 import imageio_ffmpeg
 import google.generativeai as genai
@@ -16,68 +14,31 @@ from googleapiclient.http import MediaFileUpload
 from google.oauth2.credentials import Credentials
 
 # =========================
-# CONFIG & PATHS
+# CONFIG & FOLDERS
 # =========================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-IMAGE_DIR = os.path.join(BASE_DIR, "images")      # fallback folder
+IMAGE_DIR = os.path.join(BASE_DIR, "images")
 USED_DIR = os.path.join(BASE_DIR, "images_used")
 BGM_DIR = os.path.join(BASE_DIR, "bgm")
 FONT_PATH = os.path.join(BASE_DIR, "fonts", "font.ttf")
 OUTPUT_FILE = os.path.join(BASE_DIR, "short.mp4")
-GEN_IMAGE_FILE = os.path.join(BASE_DIR, "generated.png")
 
+# Ensure folders exist
 for folder in [IMAGE_DIR, USED_DIR, BGM_DIR, os.path.dirname(FONT_PATH)]:
     if folder and not os.path.exists(folder):
         os.makedirs(folder, exist_ok=True)
 
-# =========================
-# 0. IMAGE – POLLINATIONS (WITH RETRY)
-# =========================
-def generate_krishna_image(prompt: str, out_path: str, retries: int = 3, delay: int = 5) -> bool:
-    """
-    Uses Pollinations to generate an image.
-    Retries a few times if the server fails.
-    """
-    encoded_prompt = urllib.parse.quote(prompt)
-    url = f"https://image.pollinations.ai/prompt/{encoded_prompt}"
-
-    for attempt in range(1, retries + 1):
-        try:
-            print(f"🎨 Pollinations attempt {attempt}/{retries}...")
-            response = requests.get(url, stream=True, timeout=60)
-
-            if response.status_code == 200:
-                with open(out_path, "wb") as f:
-                    for chunk in response.iter_content(1024):
-                        f.write(chunk)
-                print(f"✅ Pollinations image saved to {out_path}")
-                return True
-            else:
-                print(f"⚠️ Pollinations HTTP {response.status_code}")
-        except Exception as e:
-            print(f"⚠️ Pollinations error on attempt {attempt}: {e}")
-
-        if attempt < retries:
-            print(f"⏳ Waiting {delay} seconds before retry...")
-            time.sleep(delay)
-
-    print("❌ Pollinations failed after all retries.")
-    return False
 
 # =========================
-# 1. GEMINI – SHORT, THEME-AWARE TEXT
+# 1. VISION AI
 # =========================
-def get_ai_quote(scene_label: str):
-    """
-    Uses Gemini to generate a very short quote + title + description,
-    tailored to the Krishna scene theme (e.g., Baby Krishna, Flute Krishna).
-    """
-    print(f"🧠 Generating SHORT quote via Gemini for scene: {scene_label}...")
+def get_ai_quote(image_path):
+    print(f"👁️ Vision AI Analyzing: {image_path}...")
 
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        raise RuntimeError("❌ GEMINI_API_KEY missing!")
+        raise RuntimeError("❌ GEMINI_API_KEY is missing!")
 
     genai.configure(api_key=api_key)
 
@@ -87,38 +48,32 @@ def get_ai_quote(scene_label: str):
         "gemini-1.5-flash",
     ]
 
-    prompt = f"""
-You are a Krishna Bhakti shorts script writer.
-Current visual scene: "{scene_label}".
-
-Generate STRICT JSON with ONLY these fields:
-- "quote": Very SHORT Hindi line (5–7 words). Deep, emotional, devotional. NO emojis.
-          It MUST match the scene: {scene_label}.
-- "title": Catchy YouTube Shorts title (Hindi + English mix) with 1–2 emojis only.
-           Also match the scene mood.
-- "description": Short devotional caption + 5 relevant hashtags.
-
-Rules:
-- Quote must be very short and simple.
-- No extra commentary.
-- Output ONLY valid JSON. No markdown, no explanation.
-"""
-
     for model_name in models_to_try:
         try:
-            print(f"🤖 Trying Gemini model: {model_name}...")
+            print(f"🤖 Trying model: {model_name}...")
             model = genai.GenerativeModel(model_name)
-            result = model.generate_content(prompt)
+            myfile = genai.upload_file(image_path)
 
+            prompt = """
+You are a Bhakti poet and devotee of Lord Krishna. Look at this image.
+Generate a valid JSON object with exactly these 3 fields:
+- "quote": A 2-line Hindi Shayari/Quote. Rhyming, deep, natural. Max 10-12 words. NO EMOJIS.
+- "title": A viral, catchy YouTube Short title (Hindi + English mix) with cute emojis.
+- "description": A beautiful, heart-touching caption with emojis + 5-6 relevant hashtags.
+Output strictly valid JSON only. No markdown.
+"""
+
+            result = model.generate_content([myfile, prompt])
             raw = result.text.strip()
 
-            # Remove ```json fences if present
+            # Remove possible ```json fences
             if raw.startswith("```"):
                 raw = raw.replace("```json", "").replace("```", "")
 
+            # Extract JSON between first { and last }
             start = raw.find("{")
             end = raw.rfind("}") + 1
-            if start == -1 or end <= 0:
+            if start == -1 or end == 0:
                 raise ValueError("No JSON object found in model output")
 
             json_text = raw[start:end]
@@ -131,31 +86,32 @@ Rules:
             return data
 
         except Exception as e:
-            print(f"⚠️ Gemini model {model_name} failed: {e}")
+            print(f"⚠️ Model {model_name} failed: {e}")
             continue
 
-    raise RuntimeError("❌ All Gemini models failed")
+    raise RuntimeError("❌ All Gemini models failed in get_ai_quote")
+
 
 # =========================
-# 2. VIDEO ENGINE (IMAGE + BGM + MINIMAL BOTTOM TEXT)
+# 2. VIDEO ENGINE (BABY-KRISHNA STYLE BOTTOM TEXT)
 # =========================
 def render_video(image_path, quote):
-    print("🎬 Rendering Video with BGM...")
+    print("🎬 Rendering Video...")
 
     try:
+        # --- 1. Pick BGM ---
         bgm_files = [f for f in os.listdir(BGM_DIR) if f.lower().endswith(".mp3")]
         if not bgm_files:
-            print("❌ No BGM found in bgm/")
+            print("❌ No BGM found in bgm/ folder!")
             return None
 
         bgm_path = os.path.join(BGM_DIR, random.choice(bgm_files))
-        print(f"🎵 Using BGM: {os.path.basename(bgm_path)}")
+        print(f"🎵 Selected Music: {os.path.basename(bgm_path)}")
 
+        # --- 2. Prepare 1080x1920 Background ---
         base_width = 1080
         base_height = 1920
 
-        # ---- Background Image ----
-        from PIL import Image  # (import here just in case)
         with Image.open(image_path) as img:
             img_ratio = img.width / img.height
             target_ratio = base_width / base_height
@@ -177,67 +133,98 @@ def render_video(image_path, quote):
             img = img.crop((left, top, right, bottom))
             img.save("temp_bg.png")
 
-        # ---- Bottom Minimal Text ----
+        # --- 3. Minimal Bottom Text Style ---
         overlay = Image.new("RGBA", (base_width, base_height), (0, 0, 0, 0))
         draw = ImageDraw.Draw(overlay)
 
-        font_size = 58
+        # Smaller, softer font
+        font_size = 64
         try:
             font = ImageFont.truetype(FONT_PATH, font_size)
         except Exception:
             font = ImageFont.load_default()
 
-        wrapper = textwrap.TextWrapper(width=22)
-        lines = wrapper.wrap(quote)
+        # Compact text: we expect 1–2 short lines
+        wrapper = textwrap.TextWrapper(width=25)
+        lines = wrapper.wrap(quote.strip())
 
+        if not lines:
+            print("⚠️ Empty quote for overlay")
+            return None
+
+        # Measure text block
         line_height = font_size + 8
         text_height = len(lines) * line_height
-        max_width = 0
-
+        max_text_width = 0
         for line in lines:
             bbox = draw.textbbox((0, 0), line, font=font)
-            max_width = max(max_width, bbox[2] - bbox[0])
+            w = bbox[2] - bbox[0]
+            if w > max_text_width:
+                max_text_width = w
 
-        padding_x = 50
-        padding_y = 20
-        box_width = max_width + 2 * padding_x
+        # Bottom rounded bar (like your baby Krishna short)
+        padding_x = 60
+        padding_y = 25
+        box_width = max_text_width + 2 * padding_x
         box_height = text_height + 2 * padding_y
 
         box_x1 = (base_width - box_width) / 2
+        # Lift a bit above absolute bottom so YT UI doesn’t cover it
         box_y1 = base_height - box_height - 220
         box_x2 = box_x1 + box_width
         box_y2 = box_y1 + box_height
 
+        # Semi-transparent black rounded rectangle
         draw.rounded_rectangle(
             (box_x1, box_y1, box_x2, box_y2),
-            radius=36,
-            fill=(0, 0, 0, 170),
+            radius=40,
+            fill=(0, 0, 0, 170),  # 170/255 opacity
         )
 
+        # Centered white text inside the bar
         current_y = box_y1 + padding_y
         for line in lines:
             bbox = draw.textbbox((0, 0), line, font=font)
-            w = bbox[2] - bbox[0]
-            x = box_x1 + (box_width - w) / 2
-            draw.text((x, current_y), line, font=font, fill="white")
+            text_w = bbox[2] - bbox[0]
+            text_x = box_x1 + (box_width - text_w) / 2
+
+            draw.text(
+                (text_x, current_y),
+                line,
+                font=font,
+                fill="white",
+            )
             current_y += line_height
 
         overlay.save("temp_overlay.png")
 
-        # ---- FFmpeg: Image + Overlay + BGM ----
+        # --- 4. Encode Final Video with FFmpeg ---
         ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
         command = [
-            ffmpeg_exe, "-y",
-            "-loop", "1", "-i", "temp_bg.png",
-            "-i", "temp_overlay.png",
-            "-i", bgm_path,
-            "-filter_complex", "[0:v][1:v]overlay=0:0[v]",
-            "-map", "[v]", "-map", "2:a",
-            "-t", "58",
-            "-c:v", "libx264",
-            "-pix_fmt", "yuv420p",
+            ffmpeg_exe,
+            "-y",
+            "-loop",
+            "1",
+            "-i",
+            "temp_bg.png",
+            "-i",
+            "temp_overlay.png",
+            "-i",
+            bgm_path,
+            "-filter_complex",
+            "[0:v][1:v]overlay=0:0[v]",
+            "-map",
+            "[v]",
+            "-map",
+            "2:a",
+            "-t",
+            "58",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
             "-shortest",
-            OUTPUT_FILE
+            OUTPUT_FILE,
         ]
 
         subprocess.run(command, capture_output=True, check=True)
@@ -256,11 +243,22 @@ def render_video(image_path, quote):
                 except Exception:
                     pass
 
+
 # =========================
 # 3. YOUTUBE UPLOAD
 # =========================
 def upload_to_youtube(video_file, title, description):
     print("🚀 Uploading to YouTube...")
+
+    required_env = [
+        "YOUTUBE_REFRESH_TOKEN",
+        "YOUTUBE_CLIENT_ID",
+        "YOUTUBE_CLIENT_SECRET",
+    ]
+    for key in required_env:
+        if not os.environ.get(key):
+            print(f"❌ Missing env var: {key}")
+            return False
 
     try:
         creds = Credentials(
@@ -280,7 +278,7 @@ def upload_to_youtube(video_file, title, description):
                 "snippet": {
                     "title": title,
                     "description": description,
-                    "tags": ["Krishna", "Bhakti", "Shorts", "Hinduism"],
+                    "tags": ["Krishna", "Bhakti", "Motivation", "Hinduism", "RadhaKrishna", "Shorts"],
                     "categoryId": "22",
                 },
                 "status": {
@@ -292,82 +290,48 @@ def upload_to_youtube(video_file, title, description):
         )
 
         response = request.execute()
-        print(f"✅ Upload Success: {response['id']}")
+        print(f"✅ Upload Success! Video ID: {response['id']}")
         return True
 
     except Exception:
+        print("❌ Upload Failed:")
         traceback.print_exc()
         return False
 
+
 # =========================
-# 4. MAIN
+# 4. MAIN EXECUTION
 # =========================
 if __name__ == "__main__":
-    # 0) Define Krishna scene themes + image prompts
-    krishna_scenes = [
-        (
-            "Baby Krishna eating Makhan",
-            "cute baby Krishna eating butter, happy expression, indoor Vrindavan house, soft warm light, ultra realistic, 4k"
-        ),
-        (
-            "Krishna playing flute in Vrindavan",
-            "Lord Krishna playing flute in Vrindavan forest, cows and peacocks around, golden sunset light, ultra realistic, 4k"
-        ),
-        (
-            "Radha Krishna divine love",
-            "Radha and Krishna standing together, romantic devotional pose, flowers around, soft glowing divine light, ultra realistic, 4k"
-        ),
-        (
-            "Krishna teaching Arjuna on battlefield",
-            "Lord Krishna as charioteer guiding Arjuna on the battlefield of Kurukshetra, dramatic sky, epic scene, ultra realistic, 4k"
-        ),
-        (
-            "Peaceful meditating Krishna",
-            "Lord Krishna sitting peacefully near river Yamuna, moonlight, stars, calm night, ultra realistic, 4k"
-        ),
-        (
-            "Temple aarti of Krishna",
-            "Lord Krishna idol during temple aarti, many diyas and lamps, devotees, golden light, ultra realistic, 4k"
-        ),
-    ]
+    images = [f for f in os.listdir(IMAGE_DIR) if f.lower().endswith((".jpg", ".png"))]
 
-    scene_label, image_prompt = random.choice(krishna_scenes)
-    print(f"🎭 Selected scene: {scene_label}")
+    if not images:
+        print("❌ No images in images/ folder.")
+        exit(1)
 
-    # 1) Text from Gemini (aware of scene)
-    ai_content = get_ai_quote(scene_label)
-    quote_text = ai_content.get("quote", "").strip()
-    title_text = ai_content.get("title", "Krishna Shorts 🦚").strip()
-    desc_text = ai_content.get("description", "Jai Shree Krishna #Krishna").strip()
+    target_image = random.choice(images)
+    full_path = os.path.join(IMAGE_DIR, target_image)
+
+    print(f"🖼️ Processing: {target_image}")
+
+    ai_content = get_ai_quote(full_path)
+
+    quote_text = ai_content.get("quote", "")
+    title_text = ai_content.get("title", "Krishna Shorts 🦚")
+    desc_text = ai_content.get("description", "Jai Shree Krishna #Krishna")
 
     if not quote_text:
         print("❌ Empty quote from AI")
         exit(1)
 
-    # 2) Image from Pollinations (with retries) or fallback to local image
-    poll_ok = generate_krishna_image(image_prompt, GEN_IMAGE_FILE)
-
-    if poll_ok:
-        image_path = GEN_IMAGE_FILE
-        print(f"🖼️ Using Pollinations image: {image_path}")
-    else:
-        print("⚠️ Using fallback local image from images/")
-        images = [f for f in os.listdir(IMAGE_DIR) if f.lower().endswith((".jpg", ".png"))]
-        if not images:
-            print("❌ No fallback images available.")
-            exit(1)
-        fallback = random.choice(images)
-        image_path = os.path.join(IMAGE_DIR, fallback)
-        print(f"🖼️ Using local image: {image_path}")
-
-    # 3) Render video
-    video = render_video(image_path, quote_text)
+    video = render_video(full_path, quote_text)
 
     if video:
         success = upload_to_youtube(video, title_text, desc_text)
         if success:
-            print("✅ Reel uploaded successfully")
+            shutil.move(full_path, os.path.join(USED_DIR, target_image))
+            print("📦 Image moved to images_used/")
         else:
-            print("⚠️ Upload failed.")
+            print("⚠️ Upload failed. Image NOT moved.")
     else:
         print("❌ Video render failed.")
