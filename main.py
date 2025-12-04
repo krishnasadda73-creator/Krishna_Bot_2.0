@@ -1,13 +1,12 @@
 import os
 import random
-import shutil
 import textwrap
 import subprocess
 import json
 import traceback
 import requests
 import urllib.parse
-import time  # 👈 for retry delays
+import time  # for retry delays
 
 import imageio_ffmpeg
 import google.generativeai as genai
@@ -21,7 +20,7 @@ from google.oauth2.credentials import Credentials
 # =========================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-IMAGE_DIR = os.path.join(BASE_DIR, "images")      # fallback
+IMAGE_DIR = os.path.join(BASE_DIR, "images")      # fallback folder
 USED_DIR = os.path.join(BASE_DIR, "images_used")
 BGM_DIR = os.path.join(BASE_DIR, "bgm")
 FONT_PATH = os.path.join(BASE_DIR, "fonts", "font.ttf")
@@ -38,7 +37,7 @@ for folder in [IMAGE_DIR, USED_DIR, BGM_DIR, os.path.dirname(FONT_PATH)]:
 def generate_krishna_image(prompt: str, out_path: str, retries: int = 3, delay: int = 5) -> bool:
     """
     Uses Pollinations to generate an image.
-    Retries a few times if the server returns 5xx or fails.
+    Retries a few times if the server fails.
     """
     encoded_prompt = urllib.parse.quote(prompt)
     url = f"https://image.pollinations.ai/prompt/{encoded_prompt}"
@@ -67,10 +66,14 @@ def generate_krishna_image(prompt: str, out_path: str, retries: int = 3, delay: 
     return False
 
 # =========================
-# 1. GEMINI – SHORT, CLEAN TEXT
+# 1. GEMINI – SHORT, THEME-AWARE TEXT
 # =========================
-def get_ai_quote():
-    print("🧠 Generating SHORT minimal quote via Gemini...")
+def get_ai_quote(scene_label: str):
+    """
+    Uses Gemini to generate a very short quote + title + description,
+    tailored to the Krishna scene theme (e.g., Baby Krishna, Flute Krishna).
+    """
+    print(f"🧠 Generating SHORT quote via Gemini for scene: {scene_label}...")
 
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
@@ -84,17 +87,21 @@ def get_ai_quote():
         "gemini-1.5-flash",
     ]
 
-    prompt = """
-You are a Krishna Bhakti content creator.
+    prompt = f"""
+You are a Krishna Bhakti shorts script writer.
+Current visual scene: "{scene_label}".
+
 Generate STRICT JSON with ONLY these fields:
 - "quote": Very SHORT Hindi line (5–7 words). Deep, emotional, devotional. NO emojis.
+          It MUST match the scene: {scene_label}.
 - "title": Catchy YouTube Shorts title (Hindi + English mix) with 1–2 emojis only.
+           Also match the scene mood.
 - "description": Short devotional caption + 5 relevant hashtags.
 
 Rules:
-- Quote must be very short.
-- Simple, emotional, viral.
-- Output ONLY valid JSON. No extra text.
+- Quote must be very short and simple.
+- No extra commentary.
+- Output ONLY valid JSON. No markdown, no explanation.
 """
 
     for model_name in models_to_try:
@@ -105,11 +112,15 @@ Rules:
 
             raw = result.text.strip()
 
+            # Remove ```json fences if present
             if raw.startswith("```"):
                 raw = raw.replace("```json", "").replace("```", "")
 
             start = raw.find("{")
             end = raw.rfind("}") + 1
+            if start == -1 or end <= 0:
+                raise ValueError("No JSON object found in model output")
+
             json_text = raw[start:end]
             data = json.loads(json_text)
 
@@ -126,7 +137,7 @@ Rules:
     raise RuntimeError("❌ All Gemini models failed")
 
 # =========================
-# 2. VIDEO ENGINE (IMAGE + BGM + MINIMAL TEXT)
+# 2. VIDEO ENGINE (IMAGE + BGM + MINIMAL BOTTOM TEXT)
 # =========================
 def render_video(image_path, quote):
     print("🎬 Rendering Video with BGM...")
@@ -144,6 +155,7 @@ def render_video(image_path, quote):
         base_height = 1920
 
         # ---- Background Image ----
+        from PIL import Image  # (import here just in case)
         with Image.open(image_path) as img:
             img_ratio = img.width / img.height
             target_ratio = base_width / base_height
@@ -291,8 +303,39 @@ def upload_to_youtube(video_file, title, description):
 # 4. MAIN
 # =========================
 if __name__ == "__main__":
-    # 1) Text from Gemini
-    ai_content = get_ai_quote()
+    # 0) Define Krishna scene themes + image prompts
+    krishna_scenes = [
+        (
+            "Baby Krishna eating Makhan",
+            "cute baby Krishna eating butter, happy expression, indoor Vrindavan house, soft warm light, ultra realistic, 4k"
+        ),
+        (
+            "Krishna playing flute in Vrindavan",
+            "Lord Krishna playing flute in Vrindavan forest, cows and peacocks around, golden sunset light, ultra realistic, 4k"
+        ),
+        (
+            "Radha Krishna divine love",
+            "Radha and Krishna standing together, romantic devotional pose, flowers around, soft glowing divine light, ultra realistic, 4k"
+        ),
+        (
+            "Krishna teaching Arjuna on battlefield",
+            "Lord Krishna as charioteer guiding Arjuna on the battlefield of Kurukshetra, dramatic sky, epic scene, ultra realistic, 4k"
+        ),
+        (
+            "Peaceful meditating Krishna",
+            "Lord Krishna sitting peacefully near river Yamuna, moonlight, stars, calm night, ultra realistic, 4k"
+        ),
+        (
+            "Temple aarti of Krishna",
+            "Lord Krishna idol during temple aarti, many diyas and lamps, devotees, golden light, ultra realistic, 4k"
+        ),
+    ]
+
+    scene_label, image_prompt = random.choice(krishna_scenes)
+    print(f"🎭 Selected scene: {scene_label}")
+
+    # 1) Text from Gemini (aware of scene)
+    ai_content = get_ai_quote(scene_label)
     quote_text = ai_content.get("quote", "").strip()
     title_text = ai_content.get("title", "Krishna Shorts 🦚").strip()
     desc_text = ai_content.get("description", "Jai Shree Krishna #Krishna").strip()
@@ -302,7 +345,6 @@ if __name__ == "__main__":
         exit(1)
 
     # 2) Image from Pollinations (with retries) or fallback to local image
-    image_prompt = "beautiful baby Krishna devotional illustration, soft divine light, ultra realistic, 4k, cinematic"
     poll_ok = generate_krishna_image(image_prompt, GEN_IMAGE_FILE)
 
     if poll_ok:
