@@ -2,10 +2,8 @@ name: Krishna Reel Bot
 
 on:
   schedule:
-    # 7:00 AM IST -> 1:30 AM UTC
-    - cron: '30 1 * * *'
-    # 7:00 PM IST -> 1:30 PM UTC
-    - cron: '30 13 * * *'
+  - cron: '0 2 * * *'     # 7:30 AM IST
+  - cron: '30 13 * * *'   # 7:00 PM IST
   workflow_dispatch:
  # This line lets you click a "Run Now" button to test it
 
