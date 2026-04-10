@@ -2,13 +2,13 @@ name: Krishna Reel Bot
 
 on:
   schedule:
-  - cron: '0 2 * * *'     # 7:30 AM IST
-  - cron: '30 13 * * *'   # 7:00 PM IST
-  workflow_dispatch:
- # This line lets you click a "Run Now" button to test it
+    - cron: "30 1 * * *"   # 7:00 AM IST
+    - cron: "30 6 * * *"   # 12:00 PM IST
+    - cron: "0 13 * * *"   # 6:30 PM IST
+  workflow_dispatch:  # Manual run button
 
 permissions:
-  contents: write # REQUIRED to move the image to 'images_used'
+  contents: write  # REQUIRED to move the image to 'images_used'
 
 jobs:
   build:
@@ -38,7 +38,7 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
-          YOUTUBE_REFRESH_TOKEN: ${{ secrets.REFRESH_TOKEN }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
         run: python main.py
 
       - name: Save Changes (Move Used Image)
