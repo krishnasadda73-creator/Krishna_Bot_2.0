@@ -2,7 +2,10 @@ name: Krishna Reel Bot
 
 on:
   schedule:
-    - cron: "*/5 * * * *"   # 🔥 हर 5 मिनट run
+    - cron: "30 1 * * *"   # 7:00 AM IST
+    - cron: "30 6 * * *"   # 12:00 PM IST
+    - cron: "45 7 * * *"   # 🔥 1:15 PM IST (TEST)
+    - cron: "0 13 * * *"   # 6:30 PM IST
   workflow_dispatch:
 
 permissions:
