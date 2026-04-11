@@ -2,13 +2,15 @@ name: Krishna Reel Bot
 
 on:
   schedule:
-    - cron: "30 1 * * *"   # 7:00 AM IST
-    - cron: "30 6 * * *"   # 12:00 PM IST
-    - cron: "0 13 * * *"   # 6:30 PM IST
+    - cron: "*/5 * * * *"   # 🔥 हर 5 मिनट run
   workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: "krishna-bot"
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -32,7 +34,6 @@ jobs:
       - name: Install Libraries
         run: pip install -r requirements.txt
 
-      # 🔥 IMPORTANT: Insta session create
       - name: Create Insta Session File
         run: echo "${{ secrets.INSTA_SESSION }}" | base64 -d > session.json
 
