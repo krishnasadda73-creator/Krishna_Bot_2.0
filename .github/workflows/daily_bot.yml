@@ -47,5 +47,5 @@ jobs:
           git config --global user.email "bot@krishna.com"
           git add images/ images_used/
           # Only commit if files actually moved
-          git commit -m "Moved used image [skip ci]" || echo "No changes to commit"
+          git commit -m "Moved used image" || echo "No changes to commit"
           git push
