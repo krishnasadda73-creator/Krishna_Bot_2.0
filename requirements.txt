@@ -6,3 +6,5 @@ imageio-ffmpeg
 google-api-python-client
 google-auth
 moviepy
+pydrive2
+oauth2client
