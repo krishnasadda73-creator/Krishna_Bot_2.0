@@ -6,7 +6,9 @@ import subprocess
 import json
 import traceback
 import time
+from datetime import datetime
 
+import pytz
 import imageio_ffmpeg
 import google.generativeai as genai
 from PIL import Image, ImageDraw, ImageFont
@@ -30,6 +32,29 @@ os.makedirs(USED_DIR, exist_ok=True)
 os.makedirs(BGM_DIR, exist_ok=True)
 os.makedirs(os.path.dirname(FONT_PATH), exist_ok=True)
 os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
+
+# =========================
+# ⏰ TIME BUFFER SYSTEM
+# =========================
+def should_post():
+    ist = pytz.timezone("Asia/Kolkata")
+    now = datetime.now(ist)
+
+    hour = now.hour
+    minute = now.minute
+
+    schedule = [
+        (7, 0),
+        (12, 0),
+        (13, 15),  # 🔥 test
+        (18, 30)
+    ]
+
+    for h, m in schedule:
+        if hour == h and abs(minute - m) <= 5:
+            return True
+
+    return False
 
 # =========================
 # 1. AI QUOTE
@@ -65,7 +90,8 @@ Generate JSON:
 def render_video(image_path, quote):
     print("🎬 Rendering...")
 
-    bgm = random.choice(os.listdir(BGM_DIR))
+    bgm_files = [f for f in os.listdir(BGM_DIR) if f.endswith(".mp3")]
+    bgm = random.choice(bgm_files)
     bgm_path = os.path.join(BGM_DIR, bgm)
 
     img = Image.open(image_path).resize((1080, 1920))
@@ -103,63 +129,88 @@ def render_video(image_path, quote):
 # 3. YOUTUBE
 # =========================
 def upload_to_youtube(video, title, desc):
-    creds = Credentials(
-        None,
-        refresh_token=os.environ["YOUTUBE_REFRESH_TOKEN"],
-        token_uri="https://oauth2.googleapis.com/token",
-        client_id=os.environ["YOUTUBE_CLIENT_ID"],
-        client_secret=os.environ["YOUTUBE_CLIENT_SECRET"],
-        scopes=["https://www.googleapis.com/auth/youtube.upload"]
-    )
+    try:
+        creds = Credentials(
+            None,
+            refresh_token=os.environ["YOUTUBE_REFRESH_TOKEN"],
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=os.environ["YOUTUBE_CLIENT_ID"],
+            client_secret=os.environ["YOUTUBE_CLIENT_SECRET"],
+            scopes=["https://www.googleapis.com/auth/youtube.upload"]
+        )
 
-    youtube = build("youtube", "v3", credentials=creds)
+        youtube = build("youtube", "v3", credentials=creds)
 
-    req = youtube.videos().insert(
-        part="snippet,status",
-        body={
-            "snippet": {"title": title, "description": desc},
-            "status": {"privacyStatus": "public"}
-        },
-        media_body=MediaFileUpload(video)
-    )
+        req = youtube.videos().insert(
+            part="snippet,status",
+            body={
+                "snippet": {"title": title, "description": desc},
+                "status": {"privacyStatus": "public"}
+            },
+            media_body=MediaFileUpload(video)
+        )
 
-    req.execute()
-    print("✅ YouTube Uploaded")
+        req.execute()
+        print("✅ YouTube Uploaded")
+
+    except Exception as e:
+        print("❌ YouTube Error:", e)
 
 # =========================
 # 4. INSTAGRAM
 # =========================
 def upload_instagram(video, caption):
-    from instagrapi import Client
+    try:
+        from instagrapi import Client
 
-    print("📸 Instagram Upload...")
+        print("📸 Instagram Upload...")
 
-    cl = Client()
-    cl.load_settings("session.json")
-    cl.login("vira_lhubbb", "Uday@9799084603")
+        cl = Client()
+        cl.load_settings("session.json")
+        cl.login("vira_lhubbb", "Uday@9799084603")
 
-    time.sleep(random.randint(20, 60))
+        time.sleep(random.randint(20, 60))
 
-    cl.clip_upload(video, caption=caption)
+        cl.clip_upload(video, caption=caption)
 
-    print("✅ Instagram Uploaded")
+        print("✅ Instagram Uploaded")
+
+    except Exception as e:
+        print("❌ Instagram Error:", e)
 
 # =========================
 # MAIN
 # =========================
 if __name__ == "__main__":
-    images = os.listdir(IMAGE_DIR)
-    img = random.choice(images)
 
+    # ⏰ TIME CHECK
+    if not should_post():
+        print("⏳ Not posting time, skipping...")
+        exit(0)
+
+    # 🎯 PICK IMAGE
+    images = [f for f in os.listdir(IMAGE_DIR) if f.lower().endswith((".jpg", ".png", ".jpeg"))]
+
+    if not images:
+        print("❌ No valid images found!")
+        exit(1)
+
+    img = random.choice(images)
     path = os.path.join(IMAGE_DIR, img)
 
+    print(f"🖼️ Processing: {img}")
+
+    # 🤖 AI
     ai = get_ai_quote(path)
 
+    # 🎬 VIDEO
     video = render_video(path, ai["quote"])
 
+    # 📺 YT + 📸 INSTA
     upload_to_youtube(video, ai["title"], ai["description"])
     upload_instagram(video, ai["description"])
 
+    # 📦 MOVE IMAGE
     shutil.move(path, os.path.join(USED_DIR, img))
 
     print("🔥 ALL DONE")
