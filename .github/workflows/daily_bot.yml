@@ -2,6 +2,7 @@ name: Krishna Reel Bot
 
 on:
   schedule:
+    - cron: "15 3 * * *"   # 8:45 AM IST
     - cron: "30 1 * * *"   # 7:00 AM IST
     - cron: "30 6 * * *"   # 12:00 PM IST
     - cron: "0 13 * * *"   # 6:30 PM IST
