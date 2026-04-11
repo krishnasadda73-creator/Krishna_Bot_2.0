@@ -6,11 +6,9 @@ import subprocess
 import json
 import traceback
 import time
-from datetime import datetime
 
-import pytz
 import imageio_ffmpeg
-import google.generativeai as genai
+from google import genai
 from PIL import Image, ImageDraw, ImageFont
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
@@ -33,28 +31,6 @@ os.makedirs(BGM_DIR, exist_ok=True)
 os.makedirs(os.path.dirname(FONT_PATH), exist_ok=True)
 os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
 
-# =========================
-# ⏰ TIME BUFFER SYSTEM
-# =========================
-def should_post():
-    ist = pytz.timezone("Asia/Kolkata")
-    now = datetime.now(ist)
-
-    hour = now.hour
-    minute = now.minute
-
-    schedule = [
-        (7, 0),
-        (12, 0),
-        (13, 15),  # 🔥 test
-        (18, 30)
-    ]
-
-    for h, m in schedule:
-        if hour == h and abs(minute - m) <= 5:
-            return True
-
-    return False
 
 # =========================
 # 1. AI QUOTE
@@ -62,10 +38,10 @@ def should_post():
 def get_ai_quote(image_path):
     print(f"👁️ Vision AI: {image_path}")
 
-    genai.configure(api_key=os.environ["GEMINI_API_KEY"])
-    model = genai.GenerativeModel("gemini-2.5-flash")
+    # Using the new updated Google GenAI SDK
+    client = genai.Client()
 
-    file = genai.upload_file(image_path)
+    file = client.files.upload(file=image_path)
 
     prompt = """
 Generate JSON:
@@ -76,13 +52,17 @@ Generate JSON:
 }
 """
 
-    res = model.generate_content([file, prompt])
+    res = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=[file, prompt]
+    )
     raw = res.text.strip()
 
     raw = raw.replace("```json", "").replace("```", "")
     data = json.loads(raw)
 
     return data
+
 
 # =========================
 # 2. VIDEO
@@ -125,6 +105,7 @@ def render_video(image_path, quote):
 
     return OUTPUT_FILE
 
+
 # =========================
 # 3. YOUTUBE
 # =========================
@@ -156,6 +137,7 @@ def upload_to_youtube(video, title, desc):
     except Exception as e:
         print("❌ YouTube Error:", e)
 
+
 # =========================
 # 4. INSTAGRAM
 # =========================
@@ -167,7 +149,7 @@ def upload_instagram(video, caption):
 
         cl = Client()
         cl.load_settings("session.json")
-        cl.login("vira_lhubbb", "Uday@9799084603")
+        cl.login("vira_lhubbb", "Uday@9799084603") # Note: Be careful hardcoding passwords in scripts pushed to Github!
 
         time.sleep(random.randint(20, 60))
 
@@ -178,15 +160,11 @@ def upload_instagram(video, caption):
     except Exception as e:
         print("❌ Instagram Error:", e)
 
+
 # =========================
 # MAIN
 # =========================
 if __name__ == "__main__":
-
-    # ⏰ TIME CHECK
-    if not should_post():
-        print("⏳ Not posting time, skipping...")
-        exit(0)
 
     # 🎯 PICK IMAGE
     images = [f for f in os.listdir(IMAGE_DIR) if f.lower().endswith((".jpg", ".png", ".jpeg"))]
